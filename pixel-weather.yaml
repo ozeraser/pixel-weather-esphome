@@ -1,0 +1,250 @@
+substitutions:
+  name: pixel-weather
+  friendly_name: Pixel Weather
+  panel_mac: "AA:BB:CC:DD:EE:FF"   # your panel's Bluetooth address (it advertises as IDM-xxxxxx)
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32-c3-devkitm-1   # ESP32-C3 (QFN32, 4 MB embedded flash) on USB
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [pixel_weather]
+
+logger:
+
+api:
+  encryption:
+    key: !secret pixel_weather_api_key
+
+ota:
+  - platform: esphome
+    password: !secret pixel_weather_ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  output_power: 8.5dB   # small ESP32-C3 boards fail Wi-Fi auth ("Auth Expired") at full power
+  ap:
+    ssid: "Pixel Weather Fallback"
+    password: !secret pixel_weather_ap_password
+
+captive_portal:
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# ---------------------------------------------------------------- Bluetooth ----
+esp32_ble_tracker:
+  scan_parameters:
+    continuous: false     # we connect straight to the panel's address, no need to keep scanning
+
+ble_client:
+  - mac_address: ${panel_mac}
+    id: panel
+    auto_connect: false   # only connect while uploading, so the phone app can still use the panel
+
+# ------------------------------------------------------ data from Home Assistant ----
+sensor:
+  - platform: homeassistant
+    id: outdoor_temp
+    entity_id: sensor.gw2000c_outdoor_temperature
+    internal: true
+  - platform: homeassistant
+    id: uv_index
+    entity_id: sensor.gw2000c_uv_index
+    internal: true
+  - platform: homeassistant
+    id: strike_distance
+    entity_id: sensor.gw2000c_lightning_strike_distance
+    internal: true
+  - platform: homeassistant
+    id: forecast_high
+    entity_id: sensor.pixel_weather_forecast
+    attribute: high
+    internal: true
+  - platform: homeassistant
+    id: forecast_low
+    entity_id: sensor.pixel_weather_forecast
+    attribute: low
+    internal: true
+
+  # status shown in Home Assistant
+  - platform: wifi_signal
+    name: "Wi-Fi signal"
+    update_interval: 60s
+  - platform: uptime
+    name: "Uptime"
+  - platform: template
+    name: "Upload failures"
+    icon: mdi:alert-circle-outline
+    accuracy_decimals: 0
+    state_class: total_increasing
+    lambda: return id(pw).failures();
+    update_interval: 30s
+  - platform: template
+    name: "Last upload"
+    device_class: timestamp
+    lambda: return id(pw).last_upload_time();
+    update_interval: 30s
+
+text_sensor:
+  - platform: homeassistant
+    id: condition
+    entity_id: weather.home
+    internal: true
+  - platform: homeassistant
+    id: rain_forecast
+    entity_id: sensor.pixel_weather_forecast
+    internal: true
+  - platform: homeassistant
+    id: sun_state
+    entity_id: sun.sun
+    internal: true
+  - platform: homeassistant
+    id: last_strike
+    entity_id: sensor.gw2000c_last_lightning_strike
+    internal: true
+
+  - platform: template
+    name: "Last upload result"
+    icon: mdi:upload
+    lambda: return id(pw).last_result();
+    update_interval: 15s
+  - platform: template
+    name: "Showing"
+    icon: mdi:image-outline
+    lambda: return id(pw).showing();
+    update_interval: 15s
+
+binary_sensor:
+  - platform: template
+    name: "Panel connected"
+    device_class: connectivity
+    lambda: return id(pw).panel_connected();
+  - platform: template
+    name: "Lightning warning"
+    device_class: safety
+    lambda: return id(pw).lightning_active();
+
+# ------------------------------------------------------------------ the panel ----
+pixel_weather:
+  id: pw
+  ble_client_id: panel
+  time_id: ha_time
+  update_interval: 15min
+  temperature: outdoor_temp
+  high: forecast_high
+  low: forecast_low
+  uv_index: uv_index
+  lightning_distance: strike_distance
+  condition: condition
+  rain_forecast: rain_forecast
+  sun: sun_state
+  last_lightning: last_strike
+
+# ------------------------------------------------------------------- controls ----
+number:
+  - platform: template
+    name: "Brightness"
+    icon: mdi:brightness-6
+    min_value: 5
+    max_value: 100
+    step: 5
+    initial_value: 60
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "%"
+    on_value:
+      - lambda: id(pw).set_brightness(x);
+  - platform: template
+    name: "Lightning warning distance"
+    icon: mdi:map-marker-distance
+    min_value: 1
+    max_value: 40
+    step: 1
+    initial_value: 20
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: km
+    entity_category: config
+    on_value:
+      - lambda: id(pw).set_lightning_max_km(x);
+  - platform: template
+    name: "Lightning warning time"
+    icon: mdi:timer-outline
+    min_value: 5
+    max_value: 120
+    step: 5
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: min
+    entity_category: config
+    on_value:
+      - lambda: id(pw).set_lightning_minutes(x);
+  - platform: template
+    name: "Beep length"
+    icon: mdi:timer-music-outline
+    min_value: 1
+    max_value: 60
+    step: 1
+    initial_value: 10
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: s
+    entity_category: config
+    on_value:
+      - lambda: id(pw).set_beep_seconds(x);
+
+switch:
+  - platform: template
+    name: "Panel"
+    icon: mdi:led-on
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - lambda: id(pw).set_panel_on(true);
+    on_turn_off:
+      - lambda: id(pw).set_panel_on(false);
+  - platform: template
+    name: "Lightning beep"
+    icon: mdi:bell-ring-outline
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - lambda: id(pw).set_beep_enabled(true);
+    on_turn_off:
+      - lambda: id(pw).set_beep_enabled(false);
+
+button:
+  - platform: template
+    name: "Refresh now"
+    icon: mdi:refresh
+    on_press:
+      - lambda: id(pw).refresh();
+  - platform: template
+    name: "Test beep"
+    icon: mdi:bell-outline
+    on_press:
+      - lambda: id(pw).beep();
+  - platform: restart
+    name: "Restart"
+
+text:
+  - platform: template
+    name: "Message"
+    icon: mdi:message-text-outline
+    mode: text
+    max_length: 24
+    optimistic: true
+    on_value:
+      - lambda: id(pw).set_message(x);

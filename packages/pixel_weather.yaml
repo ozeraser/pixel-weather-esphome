@@ -1,0 +1,32 @@
+# Home Assistant side of Pixel Weather: one sensor the ESP32 reads.
+# state      = expected rain for the next 16 hours as 0-100 per hour (2 mm/h or more = 100), comma separated
+# attributes = high / low over the next 24 hours (from the Met.no hourly forecast)
+template:
+  - triggers:
+      - trigger: time_pattern
+        minutes: "/15"
+      - trigger: homeassistant
+        event: start
+    actions:
+      - action: weather.get_forecasts
+        target:
+          entity_id: weather.home
+        data:
+          type: hourly
+        response_variable: hourly
+    sensor:
+      - name: "Pixel Weather Forecast"
+        unique_id: pixel_weather_forecast
+        icon: mdi:weather-partly-rainy
+        state: >
+          {% set f = hourly['weather.home'].forecast[:16] %}
+          {% set ns = namespace(out=[]) %}
+          {% for h in f %}
+            {% set ns.out = ns.out + [ [ ((h.precipitation | float(0)) * 50) | round(0) | int, 100 ] | min ] %}
+          {% endfor %}
+          {{ ns.out | join(',') }}
+        attributes:
+          high: >
+            {{ hourly['weather.home'].forecast[:24] | map(attribute='temperature') | max }}
+          low: >
+            {{ hourly['weather.home'].forecast[:24] | map(attribute='temperature') | min }}
